@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Google Picker – Minimal</title>
+
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #ffffff;
+        font-family: -apple-system, system-ui, sans-serif;
+      }
+      #root {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #card {
+        max-width: 380px;
+        width: 100%;
+        border-radius: 18px;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.12);
+        padding: 24px 20px;
+        text-align: center;
+      }
+      #card h2 {
+        margin: 0 0 10px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      #card p {
+        margin: 0 0 18px;
+        font-size: 14px;
+        color: #6b7280;
+      }
+      #connect-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 9px 16px;
+        border-radius: 999px;
+        border: none;
+        background: #1d4ed8;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #9ca3af;
+      }
+    </style>
+
+    <script>
+      // сюда WKWebView подставит объект с apiKey, accessToken, locale
+      window.PICKER_CONFIG = window.PICKER_CONFIG || {};
+    </script>
+
+    <!-- минимальный логгер в iOS + консоль -->
+    <script>
+      function debug(step, message, extra) {
+        const payload = { step, message, extra: extra ?? null };
+
+        try {
+          if (
+            window.webkit &&
+            window.webkit.messageHandlers &&
+            window.webkit.messageHandlers.picker
+          ) {
+            window.webkit.messageHandlers.picker.postMessage(
+              JSON.stringify(payload)
+            );
+          }
+        } catch (e) {
+          console.log("debug->native error:", e);
+        }
+
+        console.log(`[${step}]`, message, extra || "");
+      }
+
+      window.onerror = function(message, source, lineno, colno, error) {
+        debug("window.onerror", message, { source, lineno, colno, error: String(error) });
+      };
+
+      window.addEventListener("unhandledrejection", function(event) {
+        debug("unhandledrejection", String(event.reason || ""), null);
+      });
+    </script>
+
+    <!-- gapi для Picker -->
+    <script src="https://apis.google.com/js/api.js"></script>
+  </head>
+
+  <body>
+    <div id="root">
+      <div id="card">
+        <h2>Select Google Forms</h2>
+        <p>Choose which forms to import into the app.</p>
+        <button id="connect-btn" type="button">Open Google Picker</button>
+        <div id="status">Loading Google Picker…</div>
+      </div>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const connectBtn = document.getElementById("connect-btn");
+
+      function setStatus(text) {
+        if (statusEl) statusEl.textContent = text;
+        debug("status", text, null);
+      }
+
+      let pickerReady = false;
+
+      function loadPickerModule() {
+        if (!window.gapi) {
+          setStatus("gapi not loaded");
+          debug("gapi-error", "gapi is undefined", null);
+          return;
+        }
+
+        gapi.load("picker", {
+          callback: () => {
+            pickerReady = true;
+            setStatus("Picker API loaded");
+            debug("picker-api", "Picker API loaded", null);
+          },
+        });
+      }
+
+      function maybeOpenPicker() {
+        const cfg = window.PICKER_CONFIG || {};
+        const apiKey = cfg.apiKey;
+        const accessToken = cfg.accessToken;
+
+        if (!apiKey) {
+          setStatus("Missing apiKey in config");
+          debug("config-error", "apiKey is missing", cfg);
+          return;
+        }
+        if (!accessToken) {
+          setStatus("Missing accessToken in config");
+          debug("config-error", "accessToken is missing", cfg);
+          return;
+        }
+        if (!pickerReady) {
+          setStatus("Picker not ready yet");
+          debug("picker-not-ready", "pickerReady is false", null);
+          return;
+        }
+
+        try {
+          const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+            .setMimeTypes("application/vnd.google-apps.form")
+            .setIncludeFolders(false)
+            .setSelectFolderEnabled(false)
+            .setMode(google.picker.DocsViewMode.LIST);
+
+          const picker = new google.picker.PickerBuilder()
+            .setDeveloperKey(apiKey)
+            .setOAuthToken(accessToken)
+            .setLocale(cfg.locale || "en")
+            .addView(view)
+            .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+            .setCallback(pickerCallback)
+            .build();
+
+          picker.setVisible(true);
+          setStatus("Picker visible");
+          debug("picker-visible", "Picker created and shown", null);
+        } catch (e) {
+          setStatus("Error creating Picker");
+          debug("picker-error", String(e), null);
+        }
+      }
+
+      function pickerCallback(data) {
+        if (!data) return;
+        const action = data[google.picker.Response.ACTION];
+
+        if (action === google.picker.Action.PICKED) {
+          const docs = data[google.picker.Response.DOCUMENTS] || [];
+          const mapped = docs.map((doc) => ({
+            id: doc[google.picker.Document.ID],
+            name: doc[google.picker.Document.NAME] || null,
+            mimeType: doc[google.picker.Document.MIME_TYPE],
+            url: doc[google.picker.Document.URL] || null,
+          }));
+          debug("picked", "Forms selected", mapped);
+          sendToNative({ type: "picked", docs: mapped });
+        } else if (action === google.picker.Action.CANCEL) {
+          debug("cancel", "Picker cancelled", null);
+          sendToNative({ type: "cancel" });
+        }
+      }
+
+      function sendToNative(obj) {
+        try {
+          const json = JSON.stringify(obj);
+          if (
+            window.webkit &&
+            window.webkit.messageHandlers &&
+            window.webkit.messageHandlers.picker
+          ) {
+            window.webkit.messageHandlers.picker.postMessage(json);
+          }
+        } catch (e) {
+          console.log("sendToNative error:", e);
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        const cfg = window.PICKER_CONFIG || null;
+        debug("dom-loaded", "DOM loaded", cfg);
+        setStatus("DOM loaded, waiting for gapi…");
+
+        // ждём gapi
+        const gapiInterval = setInterval(() => {
+          if (window.gapi) {
+            clearInterval(gapiInterval);
+            debug("gapi", "gapi loaded", null);
+            loadPickerModule();
+          }
+        }, 50);
+
+        connectBtn.addEventListener("click", () => {
+          debug("button-click", "User clicked Open Google Picker", null);
+          maybeOpenPicker();
+        });
+      });
+    </script>
+  </body>
+</html>
