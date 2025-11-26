@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Google Picker – Minimal</title>
+
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #ffffff;
+        font-family: -apple-system, system-ui, sans-serif;
+      }
+      #root {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #card {
+        max-width: 380px;
+        width: 100%;
+        border-radius: 18px;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.12);
+        padding: 24px 20px;
+        text-align: center;
+      }
+      #card h2 {
+        margin: 0 0 10px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      #card p {
+        margin: 0 0 18px;
+        font-size: 14px;
+        color: #6b7280;
+      }
+      #connect-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 9px 16px;
+        border-radius: 999px;
+        border: none;
+        background: #1d4ed8;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      #status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #9ca3af;
+      }
+    </style>
+
+    <!-- Читаем конфиг из query-параметров -->
+    <script>
+      const params = new URLSearchParams(window.location.search);
+
+      const apiKey    = params.get("apiKey");
+      const clientId  = params.get("clientId");
+      const locale    = params.get("locale") || "en";
+      const loginHint = params.get("loginHint");
+
+      window.PICKER_CONFIG = {
+        apiKey: apiKey,
+        webClientId: clientId,
+        locale: locale,
+        loginHint: loginHint
+      };
+    </script>
+
+    <!-- минимальный логгер -->
+    <script>
+      function debug(step, message, extra) {
+        const payload = { step, message, extra: extra ?? null };
+        console.log(`[${step}]`, message, extra || "");
+        // если потом захочешь вернуть в WKWebView — можно добавить postMessage
+      }
+
+      window.onerror = function(message, source, lineno, colno, error) {
+        debug("window.onerror", message, { source, lineno, colno, error: String(error) });
+      };
+
+      window.addEventListener("unhandledrejection", function(event) {
+        debug("unhandledrejection", String(event.reason || ""), null);
+      });
+    </script>
+
+    <!-- gapi для Picker -->
+    <script src="https://apis.google.com/js/api.js"></script>
+    <!-- Google Identity Services -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+
+  <body>
+    <div id="root">
+      <div id="card">
+        <h2>Connect your Google account</h2>
+        <p>Select which Google Forms to import.</p>
+        <button id="connect-btn" type="button">Continue with Google</button>
+        <div id="status">Loading Google libraries…</div>
+      </div>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const connectBtn = document.getElementById("connect-btn");
+
+      function setStatus(text) {
+        if (statusEl) statusEl.textContent = text;
+        debug("status", text, null);
+      }
+
+      let pickerReady = false;
+      let tokenClient = null;
+      let accessToken = null;
+
+      function initTokenClient() {
+        const cfg = window.PICKER_CONFIG || {};
+        const clientId = cfg.webClientId;
+        if (!clientId) {
+          setStatus("Missing webClientId in config");
+          debug("config-error", "webClientId is missing", cfg);
+          return;
+        }
+
+        const scope = "https://www.googleapis.com/auth/drive.metadata.readonly";
+
+        tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope,
+          hint: cfg.loginHint || undefined,
+          callback: (response) => {
+            if (response.error) {
+              setStatus("Authorization error");
+              debug("gis-error", String(response.error), response);
+              return;
+            }
+            accessToken = response.access_token;
+            setStatus("Authorized. Opening Picker…");
+            debug("gis-token", "Access token received", null);
+            maybeOpenPicker();
+          },
+        });
+
+        setStatus("Google Sign-In ready");
+        debug("gis-ready", "Token client initialized", null);
+      }
+
+      function loadPickerModule() {
+        if (!window.gapi) {
+          setStatus("gapi not loaded");
+          debug("gapi-error", "gapi is undefined", null);
+          return;
+        }
+
+        gapi.load("picker", {
+          callback: () => {
+            pickerReady = true;
+            setStatus("Picker API loaded");
+            debug("picker-api", "Picker API loaded", null);
+            // не открываем автоматом — ждём токен
+          },
+        });
+      }
+
+      function maybeOpenPicker() {
+        if (!pickerReady || !accessToken) return;
+
+        const cfg = window.PICKER_CONFIG || {};
+        const apiKey = cfg.apiKey;
+        if (!apiKey) {
+          setStatus("Missing apiKey in config");
+          debug("config-error", "apiKey is missing", cfg);
+          return;
+        }
+
+        try {
+          const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+            .setMimeTypes("application/vnd.google-apps.form")
+            .setIncludeFolders(false)
+            .setSelectFolderEnabled(false)
+            .setMode(google.picker.DocsViewMode.LIST);
+
+          const picker = new google.picker.PickerBuilder()
+            .setDeveloperKey(apiKey)
+            .setOAuthToken(accessToken)
+            .setLocale(cfg.locale || "en")
+            .addView(view)
+            .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+            .setCallback((data) => {
+              debug("picker-callback", "Picker callback fired", data || null);
+            })
+            .build();
+
+          picker.setVisible(true);
+          setStatus("Picker visible");
+          debug("picker-visible", "Picker created and shown", null);
+        } catch (e) {
+          setStatus("Error creating Picker");
+          debug("picker-error", String(e), null);
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        debug("dom-loaded", "DOM loaded", window.PICKER_CONFIG || null);
+        setStatus("DOM loaded, waiting for Google libraries…");
+
+        // ждём gapi
+        const gapiInterval = setInterval(() => {
+          if (window.gapi) {
+            clearInterval(gapiInterval);
+            debug("gapi", "gapi loaded", null);
+            loadPickerModule();
+          }
+        }, 50);
+
+        // ждём GSI
+        const gisInterval = setInterval(() => {
+          if (window.google && google.accounts && google.accounts.oauth2) {
+            clearInterval(gisInterval);
+            debug("gis-lib-ready", "google.accounts.oauth2 detected", null);
+            initTokenClient();
+          }
+        }, 50);
+
+        connectBtn.addEventListener("click", () => {
+          if (!tokenClient) {
+            setStatus("Google Sign-In not ready yet");
+            debug("gis-not-ready", "tokenClient is null", null);
+            return;
+          }
+          setStatus("Waiting for Google authorization…");
+          debug("gis-request", "Requesting access token", null);
+          tokenClient.requestAccessToken({ prompt: "consent" });
+        });
+      });
+    </script>
+  </body>
+</html>
