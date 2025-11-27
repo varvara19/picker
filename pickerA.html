@@ -132,18 +132,17 @@
           (window.location.hash || "").replace(/^#/, "")
         );
 
-        const apiKey = hashParams.get("apiKey") || searchParams.get("apiKey");
-        const token = hashParams.get("token") || searchParams.get("token");
-        const locale =
-          hashParams.get("locale") ||
-          searchParams.get("locale") ||
-          navigator.language ||
-          "en";
+        const apiKey   = hashParams.get("apiKey")   || searchParams.get("apiKey");
+        const token    = hashParams.get("token")    || searchParams.get("token");
+        const locale   = hashParams.get("locale")   || searchParams.get("locale") ||
+                         navigator.language || "en";
+        const callback = hashParams.get("callback") || searchParams.get("callback");
 
         const cfg = {
           apiKey,
           token,
           locale,
+          callback,
           hasToken: !!token,
         };
 
@@ -157,6 +156,42 @@
         }
 
         return cfg;
+      }
+
+      // ---------- callback back to app ----------
+      function completeWithStatus(status, payload) {
+        if (!pickerConfig || !pickerConfig.callback) {
+          debug("callback", "No callback param, staying on page", {
+            status,
+            payload,
+          });
+          return;
+        }
+
+        try {
+          const url = new URL(pickerConfig.callback);
+          const params = url.searchParams;
+          params.set("status", status);
+
+          if (payload && typeof payload === "object") {
+            Object.keys(payload).forEach((key) => {
+              const value = payload[key];
+              if (value !== undefined && value !== null) {
+                params.set(key, String(value));
+              }
+            });
+          }
+
+          const finalUrl = url.toString();
+          debug("callback-url", "Redirecting to callback URL", finalUrl);
+          window.location.href = finalUrl;
+        } catch (e) {
+          debug(
+            "callback-error",
+            "Failed to build callback URL",
+            String(e || "")
+          );
+        }
       }
 
       // ---------- Picker logic ----------
@@ -225,8 +260,20 @@
             url: doc[google.picker.Document.URL] || null,
           }));
           debug("picked", "Forms selected", mapped);
+
+          const first = mapped[0];
+          if (first) {
+            completeWithStatus("selected", {
+              docId: first.id,
+              docName: first.name,
+              mimeType: first.mimeType,
+            });
+          } else {
+            completeWithStatus("selected", {});
+          }
         } else if (action === google.picker.Action.CANCEL) {
           debug("cancel", "Picker cancelled", null);
+          completeWithStatus("cancel", {});
         }
       }
 
