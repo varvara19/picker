@@ -1,210 +1,257 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>Google Forms Picker (token)</title>
+  <head>
+    <meta charset="utf-8" />
+    <title>Google Forms Picker</title>
 
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-      font-family: -apple-system, system-ui, sans-serif;
-      background: #f3f4f6;
-    }
-    #root {
-      height: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    #card {
-      min-width: 260px;
-      max-width: 420px;
-      padding: 24px 20px;
-      border-radius: 18px;
-      background: #ffffff;
-      box-shadow: 0 24px 80px rgba(15, 23, 42, 0.16);
-      text-align: center;
-    }
-    #title {
-      font-size: 18px;
-      font-weight: 600;
-      margin-bottom: 8px;
-    }
-    #status {
-      font-size: 13px;
-      color: #6b7280;
-    }
-    #error {
-      margin-top: 10px;
-      font-size: 13px;
-      color: #b91c1c;
-      display: none;
-    }
-  </style>
-
-  <!-- Google API (gapi) -->
-  <script src="https://apis.google.com/js/api.js"></script>
-
-  <script>
-    // --- простой логгер в консоль Safari ---
-    function log(step, msg, extra) {
-      const payload = { step, msg, extra: extra ?? null };
-      console.log("[PICKER]", step, msg, extra || "");
-    }
-
-    window.onerror = function (message, source, lineno, colno, error) {
-      log("window.onerror", message, { source, lineno, colno, error: String(error) });
-      showError("JS error: " + message);
-    };
-
-    window.addEventListener("unhandledrejection", function (event) {
-      log("unhandledrejection", String(event.reason || ""), null);
-      showError("Promise rejection: " + String(event.reason || ""));
-    });
-
-    function setStatus(text) {
-      const el = document.getElementById("status");
-      if (el) el.textContent = text;
-      log("status", text, null);
-    }
-
-    function showError(text) {
-      const el = document.getElementById("error");
-      if (el) {
-        el.style.display = "block";
-        el.textContent = text;
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #f3f4f6;
+        font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
       }
-      log("error", text, null);
-    }
 
-    // --- парсим apiKey и token из URL ---
-    function readConfigFromUrl() {
-      const params = new URLSearchParams(window.location.search);
-      const apiKey = params.get("apiKey");
-      const token  = params.get("token");
-      const locale = params.get("locale") || "en";
+      #root {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
 
-      const cfg = {
-        apiKey,
-        token,
-        locale,
+      #card {
+        max-width: 380px;
+        width: 100%;
+        border-radius: 24px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        box-shadow:
+          0 22px 44px rgba(15, 23, 42, 0.18),
+          0 0 0 1px rgba(255, 255, 255, 0.9);
+        padding: 24px 22px 20px;
+        text-align: center;
+        background: #ffffff;
+      }
+
+      #title {
+        margin: 0 0 4px;
+        font-size: 18px;
+        font-weight: 600;
+        color: #0f172a;
+      }
+
+      #subtitle {
+        margin: 0 0 18px;
+        font-size: 14px;
+        color: #6b7280;
+      }
+
+      #status {
+        margin-top: 6px;
+        font-size: 12px;
+        color: #9ca3af;
+      }
+
+      #status.error {
+        color: #dc2626;
+      }
+
+      #footer {
+        margin-top: 10px;
+        font-size: 11px;
+        color: #cbd5f5;
+        opacity: 0.9;
+      }
+    </style>
+
+    <!-- gapi for Picker -->
+    <script src="https://apis.google.com/js/api.js"></script>
+  </head>
+
+  <body>
+    <div id="root">
+      <div id="card">
+        <h2 id="title">Google Forms Picker</h2>
+        <p id="subtitle">Loading your forms…</p>
+        <div id="status">Initializing…</div>
+        <div id="footer">Picker API not started yet</div>
+      </div>
+    </div>
+
+    <script>
+      // ---------- logging ----------
+      function debug(step, message, extra) {
+        console.log(
+          "[PICKER]",
+          "–",
+          '"' + step + '"',
+          "–",
+          '"' + message + '"',
+          "–",
+          extra || ""
+        );
+      }
+
+      window.onerror = function (message, source, lineno, colno, error) {
+        debug("window.onerror", String(message), {
+          source,
+          lineno,
+          colno,
+          error: String(error || ""),
+        });
       };
 
-      log("config", "Parsed config from URL", {
-        apiKeyPreview: apiKey ? apiKey.slice(0, 6) + "…" : null,
-        hasToken: !!token,
-        locale,
+      window.addEventListener("unhandledrejection", function (event) {
+        debug("unhandledrejection", String(event.reason || ""), null);
       });
 
-      if (!apiKey) {
-        showError("Missing apiKey query param");
-      }
-      if (!token) {
-        showError("Missing token query param");
-      }
+      // ---------- UI helpers ----------
+      const statusEl = document.getElementById("status");
+      const footerEl = document.getElementById("footer");
 
-      return cfg;
-    }
-
-    let pickerConfig = null;
-
-    function onPickerApiLoad() {
-      setStatus("Picker API loaded");
-      log("picker-api", "Picker API loaded", null);
-
-      if (!pickerConfig.apiKey || !pickerConfig.token) {
-        showError("apiKey or token is missing, picker cannot be created");
-        return;
-      }
-
-      try {
-        const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
-          .setIncludeFolders(false)
-          .setSelectFolderEnabled(false)
-          .setMimeTypes("application/vnd.google-apps.form")
-          .setMode(google.picker.DocsViewMode.LIST);
-
-        const picker = new google.picker.PickerBuilder()
-          .setDeveloperKey(pickerConfig.apiKey)
-          .setOAuthToken(pickerConfig.token)
-          .setLocale(pickerConfig.locale || "en")
-          .addView(view)
-          .setCallback(pickerCallback)
-          .build();
-
-        picker.setVisible(true);
-        setStatus("Picker visible");
-        log("picker-visible", "Picker created and shown", null);
-      } catch (e) {
-        showError("Exception while creating picker: " + String(e));
-        log("picker-exception", String(e), e);
-      }
-    }
-
-    function pickerCallback(data) {
-      if (!data) return;
-
-      const action = data[google.picker.Response.ACTION];
-
-      if (action === google.picker.Action.PICKED) {
-        const docs = data[google.picker.Response.DOCUMENTS] || [];
-        const mapped = docs.map((doc) => ({
-          id: doc[google.picker.Document.ID],
-          name: doc[google.picker.Document.NAME] || null,
-          mimeType: doc[google.picker.Document.MIME_TYPE],
-          url: doc[google.picker.Document.URL] || null,
-        }));
-        log("picked", "User picked docs", mapped);
-      } else if (action === google.picker.Action.CANCEL) {
-        log("cancel", "Picker cancelled", null);
-      }
-    }
-
-    function initPicker() {
-      setStatus("Parsing config…");
-      pickerConfig = readConfigFromUrl();
-
-      if (!window.gapi) {
-        showError("gapi is not available");
-        log("gapi-missing", "window.gapi is undefined", null);
-        return;
-      }
-
-      setStatus("Loading Picker module…");
-      log("gapi-load", "Calling gapi.load('picker')", null);
-
-      gapi.load("picker", {
-        callback: onPickerApiLoad,
-        onerror: function () {
-          showError("Failed to load Picker API");
-          log("picker-load-error", "gapi.load('picker') failed", null);
+      function setStatus(text, isError) {
+        if (!statusEl) return;
+        statusEl.textContent = text || "";
+        if (isError) {
+          statusEl.classList.add("error");
+        } else {
+          statusEl.classList.remove("error");
         }
+        debug("status", text || "", "");
+      }
+
+      function setFooter(text) {
+        if (!footerEl) return;
+        footerEl.textContent = text || "";
+      }
+
+      // ---------- config from URL (hash + query) ----------
+      function getPickerConfigFromUrl() {
+        const searchParams = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(
+          (window.location.hash || "").replace(/^#/, "")
+        );
+
+        const apiKey = hashParams.get("apiKey") || searchParams.get("apiKey");
+        const token = hashParams.get("token") || searchParams.get("token");
+        const locale =
+          hashParams.get("locale") ||
+          searchParams.get("locale") ||
+          navigator.language ||
+          "en";
+
+        const cfg = {
+          apiKey,
+          token,
+          locale,
+          hasToken: !!token,
+        };
+
+        debug("config", "Parsed config from URL", cfg);
+
+        if (!apiKey) {
+          debug("error", "Missing apiKey param", "");
+        }
+        if (!token) {
+          debug("error", "Missing token param", "");
+        }
+
+        return cfg;
+      }
+
+      // ---------- Picker logic ----------
+      let pickerModuleReady = false;
+      let pickerCreated = false;
+      let pickerConfig = null;
+
+      function maybeCreatePicker() {
+        if (pickerCreated || !pickerModuleReady || !pickerConfig) {
+          return;
+        }
+
+        const { apiKey, token, locale } = pickerConfig;
+
+        if (!apiKey || !token) {
+          setStatus(
+            "apiKey or token is missing, picker cannot be created",
+            true
+          );
+          debug(
+            "error",
+            "apiKey or token is missing, picker cannot be created",
+            ""
+          );
+          return;
+        }
+
+        try {
+          const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+            .setMimeTypes("application/vnd.google-apps.form")
+            .setIncludeFolders(false)
+            .setSelectFolderEnabled(false)
+            .setMode(google.picker.DocsViewMode.LIST);
+
+          const picker = new google.picker.PickerBuilder()
+            .setDeveloperKey(apiKey)
+            .setOAuthToken(token)
+            .setLocale(locale || "en")
+            .addView(view)
+            .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+            .setCallback(pickerCallback)
+            .build();
+
+          picker.setVisible(true);
+          pickerCreated = true;
+          setStatus("Picker API loaded", false);
+          setFooter("Picker visible");
+          debug("picker-visible", "Picker created and shown", "");
+        } catch (e) {
+          setStatus("Error while creating Picker", true);
+          debug("picker-error", String(e), "");
+        }
+      }
+
+      function pickerCallback(data) {
+        if (!data) return;
+
+        const action = data[google.picker.Response.ACTION];
+
+        if (action === google.picker.Action.PICKED) {
+          const docs = data[google.picker.Response.DOCUMENTS] || [];
+          const mapped = docs.map((doc) => ({
+            id: doc[google.picker.Document.ID],
+            name: doc[google.picker.Document.NAME] || null,
+            mimeType: doc[google.picker.Document.MIME_TYPE],
+            url: doc[google.picker.Document.URL] || null,
+          }));
+          debug("picked", "Forms selected", mapped);
+        } else if (action === google.picker.Action.CANCEL) {
+          debug("cancel", "Picker cancelled", null);
+        }
+      }
+
+      // ---------- bootstrap ----------
+      document.addEventListener("DOMContentLoaded", function () {
+        setStatus("DOM loaded, waiting for gapi…", false);
+        debug("dom-loaded", "DOM loaded", "");
+
+        pickerConfig = getPickerConfigFromUrl();
+
+        const gapiInterval = setInterval(function () {
+          if (window.gapi && gapi.load) {
+            clearInterval(gapiInterval);
+            debug("gapi", "gapi ready, initializing Picker…", "");
+            gapi.load("picker", {
+              callback: function () {
+                pickerModuleReady = true;
+                setStatus("Picker API loaded", false);
+                debug("picker-api", "Picker API loaded", "");
+                maybeCreatePicker();
+              },
+            });
+          }
+        }, 50);
       });
-    }
-
-    document.addEventListener("DOMContentLoaded", function () {
-      setStatus("DOM loaded, waiting for gapi…");
-      log("dom-loaded", "DOM ready", null);
-
-      const interval = setInterval(function () {
-        if (window.gapi) {
-          clearInterval(interval);
-          setStatus("gapi ready, initializing Picker…");
-          initPicker();
-        }
-      }, 50);
-    });
-  </script>
-</head>
-<body>
-  <div id="root">
-    <div id="card">
-      <div id="title">Google Forms Picker</div>
-      <div id="status">Initializing…</div>
-      <div id="error"></div>
-    </div>
-  </div>
-</body>
+    </script>
+  </body>
 </html>
