@@ -2,15 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Google Picker – Drive.file demo</title>
+    <title>Google Picker – Token</title>
 
     <style>
       html, body {
         margin: 0;
         padding: 0;
         height: 100%;
-        font-family: -apple-system, system-ui, sans-serif;
         background: #f9fafb;
+        font-family: -apple-system, system-ui, sans-serif;
       }
       #root {
         height: 100%;
@@ -38,19 +38,6 @@
         font-size: 14px;
         color: #6b7280;
       }
-      #connect-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 9px 16px;
-        border-radius: 999px;
-        border: none;
-        background: #1d4ed8;
-        color: #fff;
-        font-size: 14px;
-        font-weight: 500;
-        cursor: pointer;
-      }
       #status {
         margin-top: 10px;
         font-size: 12px;
@@ -58,22 +45,20 @@
       }
     </style>
 
-    <!-- gapi + GIS -->
+    <!-- только gapi, без GIS -->
     <script src="https://apis.google.com/js/api.js"></script>
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
     <div id="root">
       <div id="card">
-        <h2>Connect Google Drive</h2>
-        <p>Sign in and pick your Google Forms.</p>
-        <button id="connect-btn" type="button">Continue with Google</button>
-        <div id="status">Waiting for Google libraries…</div>
+        <h2>Google Forms Picker</h2>
+        <p>Loading your forms…</p>
+        <div id="status">Initializing…</div>
       </div>
     </div>
 
     <script>
-      // ---- минимальный логгер (как в треде) ----
+      // простенький логгер
       function debug(step, message, extra) {
         console.log(`[${step}]`, message, extra || "");
       }
@@ -86,54 +71,30 @@
         debug("unhandledrejection", String(event.reason || ""), null);
       });
 
-      // ---- читаем конфиг из query params ----
-      const params = new URLSearchParams(window.location.search);
-      const CONFIG = {
-        clientId: params.get("client_id") || "",
-        apiKey: params.get("api_key") || "",
-        locale: params.get("locale") || "en",
-      };
-
       const statusEl = document.getElementById("status");
-      const connectBtn = document.getElementById("connect-btn");
-
       function setStatus(text) {
         if (statusEl) statusEl.textContent = text;
         debug("status", text, null);
       }
 
-      let tokenClient = null;
-      let accessToken = null;
-      let pickerReady = false;
+      // читаем apiKey и token из query
+      const params = new URLSearchParams(window.location.search);
+      const CONFIG = {
+        apiKey: params.get("apiKey") || params.get("api_key") || "",
+        accessToken: params.get("token") || params.get("access_token") || "",
+        locale: params.get("locale") || "en",
+      };
 
-      function initTokenClient() {
-        if (!CONFIG.clientId) {
-          setStatus("Missing client_id in URL");
-          debug("config-error", "client_id is missing", CONFIG);
-          return;
-        }
-
-        const scope = "https://www.googleapis.com/auth/drive.file";
-
-        tokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: CONFIG.clientId,
-          scope,
-          callback: (response) => {
-            if (response.error) {
-              setStatus("Authorization error");
-              debug("gis-error", String(response.error), response);
-              return;
-            }
-            accessToken = response.access_token;
-            setStatus("Authorized. Loading Picker…");
-            debug("gis-token", "access token ok", null);
-            maybeOpenPicker();
-          },
-        });
-
-        setStatus("Google Sign-In ready");
-        debug("gis-ready", "token client initialized", null);
+      if (!CONFIG.apiKey) {
+        setStatus("Missing apiKey in URL");
+        debug("config-error", "no apiKey", CONFIG);
       }
+      if (!CONFIG.accessToken) {
+        setStatus("Missing access token in URL");
+        debug("config-error", "no accessToken", CONFIG);
+      }
+
+      let pickerReady = false;
 
       function loadPickerModule() {
         if (!window.gapi) {
@@ -153,13 +114,8 @@
       }
 
       function maybeOpenPicker() {
-        if (!pickerReady || !accessToken) return;
-
-        if (!CONFIG.apiKey) {
-          setStatus("Missing api_key in URL");
-          debug("config-error", "api_key is missing", CONFIG);
-          return;
-        }
+        if (!pickerReady) return;
+        if (!CONFIG.apiKey || !CONFIG.accessToken) return;
 
         try {
           const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
@@ -169,7 +125,7 @@
 
           const picker = new google.picker.PickerBuilder()
             .setDeveloperKey(CONFIG.apiKey)
-            .setOAuthToken(accessToken)
+            .setOAuthToken(CONFIG.accessToken)
             .setLocale(CONFIG.locale)
             .addView(view)
             .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
@@ -195,35 +151,15 @@
 
       document.addEventListener("DOMContentLoaded", () => {
         debug("dom-loaded", "DOM loaded", CONFIG);
-        setStatus("DOM loaded, waiting for Google libraries…");
+        setStatus("DOM loaded, loading gapi…");
 
-        // ждём gapi
-        const gapiInterval = setInterval(() => {
+        const interval = setInterval(() => {
           if (window.gapi) {
-            clearInterval(gapiInterval);
+            clearInterval(interval);
             debug("gapi", "gapi loaded", null);
             loadPickerModule();
           }
         }, 50);
-
-        // ждём GIS
-        const gisInterval = setInterval(() => {
-          if (window.google && google.accounts && google.accounts.oauth2) {
-            clearInterval(gisInterval);
-            initTokenClient();
-          }
-        }, 50);
-
-        connectBtn.addEventListener("click", () => {
-          if (!tokenClient) {
-            setStatus("Google Sign-In not ready yet");
-            debug("gis-not-ready", "tokenClient is null", null);
-            return;
-          }
-          setStatus("Waiting for Google authorization…");
-          debug("gis-request", "requestAccessToken", null);
-          tokenClient.requestAccessToken({ prompt: "consent" });
-        });
       });
     </script>
   </body>
